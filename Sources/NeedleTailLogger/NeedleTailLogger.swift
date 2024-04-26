@@ -8,13 +8,13 @@
 import Foundation
 import Logging
 
-public struct NeedleTailLogger {
+public struct NeedleTailLogger: Sendable {
     
     private let logger: Logger
     private let redColor = "\u{001B}[0;31m"  // Red color
     private let resetColor = "\u{001B}[0m" // Reset color to default
     
-    public init(_ logger: Logger = Logger(label: "[ NeedleTailLogging ]"), level: Logger.Level = .debug) {
+    public init(_ logger: Logger = Logger(label: "[NeedleTailLogging]"), level: Logger.Level = .debug) {
         var logger = logger
         logger.logLevel = level
         self.logger = logger
