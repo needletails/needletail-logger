@@ -21,10 +21,7 @@ let package = Package(
             name: "NeedleTailLogger",
                 dependencies: [
                     .product(name: "Logging", package: "swift-log")
-                ],
-            swiftSettings: [
-                .unsafeFlags(["-warn-concurrency"], .when(configuration: .debug))
-            ]
+                ]
         ),
         .testTarget(
             name: "NeedleTailLoggerTests",
