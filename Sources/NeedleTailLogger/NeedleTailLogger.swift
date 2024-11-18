@@ -13,15 +13,19 @@ public actor NeedleTailLogger {
     private var logger: Logger
     private var logFileURL: URL
     private let maxLines: Int
+    private var writeToFile: Bool
     
     public init(_
                 logger: Logger = Logger(label: "[NeedleTailLogging]"),
                 level: Logger.Level = .debug,
-                maxLines: Int = 1000) {
+                maxLines: Int = 1000,
+                writeToFile: Bool = false
+    ) {
         var logger = logger
         logger.logLevel = level
         self.logger = logger
         self.maxLines = maxLines
+        self.writeToFile = writeToFile
         
         // Set the log file URL
         guard let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?.appendingPathComponent("logs.txt") else {
@@ -44,6 +48,10 @@ public actor NeedleTailLogger {
     public func setLogLevel(_ level: Logger.Level) {
         logger.logLevel = level
         logger.info("Log level set to \(level)")
+    }
+    
+    public func setWriteToFile(_ shouldWrite: Bool) {
+        writeToFile = shouldWrite
     }
     
     public func log(
@@ -74,7 +82,9 @@ public actor NeedleTailLogger {
             logger.critical(message, metadata: metadata)
         }
         
-        await logMessage(message.description)
+        if writeToFile {
+            await logMessage(message.description)
+        }
     }
     
     private func logMessage(_ message: String) async {
