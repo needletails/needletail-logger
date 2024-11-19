@@ -40,16 +40,24 @@ public actor NeedleTailLogger {
         }
         self.logFileURL = url
         
-        // Create a new log file if it already exists
-        if FileManager.default.fileExists(atPath: logFileURL.path) {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.createNewLogFile()
+        do {
+        let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
+        let lineCount = fileContents.components(separatedBy: .newlines).count
+    
+                
+                // Create a new log file if it already exists
+                if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await self.createNewLogFile()
+                    }
+                } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                    // Create the log file if it doesn't exist
+                    FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+                }
+            } catch {
+                logger.error("Error creating file - Error: \(error)")
             }
-        } else {
-            // Create the log file if it doesn't exist
-            FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
-        }
     }
     
     public func setLogLevel(_ level: Logger.Level) {
