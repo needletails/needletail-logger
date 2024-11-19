@@ -15,11 +15,11 @@ public actor NeedleTailLogger {
     private let maxLines: Int
     private var writeToFile: Bool
     
-    public init(_
-                logger: Logger = Logger(label: "[NeedleTailLogging]"),
-                level: Logger.Level = .debug,
-                maxLines: Int = 1000,
-                writeToFile: Bool = false
+    public init(
+        logger: Logger = Logger(label: "[NeedleTailLogging]"),
+        level: Logger.Level = .debug,
+        maxLines: Int = 1000,
+        writeToFile: Bool = false
     ) {
         var logger = logger
         logger.logLevel = level
@@ -35,29 +35,38 @@ public actor NeedleTailLogger {
 #endif
         
         // Get the URL for the specified directory
-        guard let url = FileManager.default.urls(for: directory, in: .userDomainMask).first?.appendingPathComponent("logs.txt") else {
-            fatalError("Unable to access log file directory.")
+        guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
+            fatalError("Unable to access base directory.")
         }
-        self.logFileURL = url
+        
+        // Create the logs directory
+        let logsDirectory = baseDirectory.appendingPathComponent("logs")
+        do {
+            try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
+        } catch {
+            logger.error("Error creating logs directory - Error: \(error)")
+        }
+        
+        // Set the log file URL to the logs directory
+        self.logFileURL = logsDirectory.appendingPathComponent("logs.txt")
         
         do {
-        let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
-        let lineCount = fileContents.components(separatedBy: .newlines).count
-    
-                
-                // Create a new log file if it already exists
-                if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
-                    Task { [weak self] in
-                        guard let self else { return }
-                        await self.createNewLogFile()
-                    }
-                } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
-                    // Create the log file if it doesn't exist
-                    FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+            let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
+            let lineCount = fileContents.components(separatedBy: .newlines).count
+            
+            // Create a new log file if it already exists
+            if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.createNewLogFile()
                 }
-            } catch {
-                logger.error("Error creating file - Error: \(error)")
+            } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                // Create the log file if it doesn't exist
+                FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
             }
+        } catch {
+            logger.error("Error creating file - Error: \(error)")
+        }
     }
     
     public func setLogLevel(_ level: Logger.Level) {
@@ -67,6 +76,25 @@ public actor NeedleTailLogger {
     
     public func setWriteToFile(_ shouldWrite: Bool) {
         writeToFile = shouldWrite
+    }
+    
+    public func deleteLogFiles() {
+        let logsDirectory = logFileURL.deletingLastPathComponent() // Get the logs directory
+        
+        do {
+            // Get the contents of the logs directory
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: logsDirectory, includingPropertiesForKeys: nil)
+            
+            // Iterate through the files and delete them
+            for fileURL in fileURLs {
+                try FileManager.default.removeItem(at: fileURL)
+                logger.info("Deleted log file: \(fileURL.lastPathComponent)")
+            }
+            
+            logger.info("All log files deleted successfully.")
+        } catch {
+            logger.error("Failed to delete log files: \(error.localizedDescription)")
+        }
     }
     
     public func log(
