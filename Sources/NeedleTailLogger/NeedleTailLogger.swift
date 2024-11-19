@@ -50,22 +50,25 @@ public actor NeedleTailLogger {
         // Set the log file URL to the logs directory
         self.logFileURL = logsDirectory.appendingPathComponent("logs.txt")
         
-        do {
-            let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
-            let lineCount = fileContents.components(separatedBy: .newlines).count
-            
+        
+        func fileCreation(lineCount: Int) async {
             // Create a new log file if it already exists
-            if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.createNewLogFile()
-                }
-            } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
+            if await FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
+                await self.createNewLogFile()
+            } else if await !FileManager.default.fileExists(atPath: logFileURL.path) {
                 // Create the log file if it doesn't exist
-                FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+                await FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
             }
+        }
+        
+        Task {
+        do {
+            let fileContents = try await String(contentsOf: logFileURL, encoding: .utf8)
+            let lineCount = fileContents.components(separatedBy: .newlines).count
+                await fileCreation(lineCount: lineCount)
         } catch {
-            logger.error("Error creating file - Error: \(error)")
+                await fileCreation(lineCount: 0)
+            }
         }
     }
     
