@@ -15,7 +15,7 @@ public actor NeedleTailLogger {
     private let maxLines: Int
     private var writeToFile: Bool
     
-    public init(
+    public init(_
         logger: Logger = Logger(label: "[NeedleTailLogging]"),
         level: Logger.Level = .debug,
         maxLines: Int = 1000,
