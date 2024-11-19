@@ -27,8 +27,15 @@ public actor NeedleTailLogger {
         self.maxLines = maxLines
         self.writeToFile = writeToFile
         
-        // Set the log file URL
-        guard let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?.appendingPathComponent("logs.txt") else {
+        let directory: FileManager.SearchPathDirectory
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+        directory = .libraryDirectory
+#else
+        directory = .documentDirectory // Use document directory for Linux
+#endif
+        
+        // Get the URL for the specified directory
+        guard let url = FileManager.default.urls(for: directory, in: .userDomainMask).first?.appendingPathComponent("logs.txt") else {
             fatalError("Unable to access log file directory.")
         }
         self.logFileURL = url
