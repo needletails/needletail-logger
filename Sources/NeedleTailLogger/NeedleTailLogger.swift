@@ -4,96 +4,119 @@
 //
 //  Created by Cole M on 4/12/24.
 //
-
 import Foundation
 import Logging
 
-public actor NeedleTailLogger {
+public struct NeedleTailLogger: Sendable {
     
     private var logger: Logger
-    private var logFileURL: URL
+
     private let maxLines: Int
+    private let maxLineLength: Int
     private var writeToFile: Bool
     
-    public init(_
-        logger: Logger = Logger(label: "[NeedleTailLogging]"),
+    private let logToFile = LogToFile()
+    
+    private class LogToFile: @unchecked Sendable {
+        private var logFileURL: URL?
+        private var mutex = pthread_mutex_t()
+
+         init() {
+             pthread_mutex_init(&mutex, nil)
+         }
+
+         deinit {
+             pthread_mutex_destroy(&mutex)
+         }
+
+         func setLogFileURL(_ url: URL) {
+             pthread_mutex_lock(&mutex)
+             defer {
+                 pthread_mutex_unlock(&mutex)
+             }
+             self.logFileURL = url
+         }
+
+         func getLogFileURL() -> URL? {
+             pthread_mutex_lock(&mutex)
+             defer {
+                 pthread_mutex_unlock(&mutex)
+             }
+             let url = self.logFileURL
+             return url
+         }
+    }
+    
+    public init(
+        _ logger: Logger = Logger(label: "[NeedleTailLogging]"),
         level: Logger.Level = .debug,
         maxLines: Int = 1000,
+        maxLineLength: Int = 80,
         writeToFile: Bool = false
     ) {
         var logger = logger
         logger.logLevel = level
         self.logger = logger
         self.maxLines = maxLines
+        self.maxLineLength = maxLineLength
         self.writeToFile = writeToFile
         
-        let directory: FileManager.SearchPathDirectory
+        if writeToFile {
+            let directory: FileManager.SearchPathDirectory
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-        directory = .libraryDirectory
+            directory = .libraryDirectory
 #else
-        directory = .documentDirectory // Use document directory for Linux
+            directory = .documentDirectory // Use document directory for Linux
 #endif
-        
-        // Get the URL for the specified directory
-        guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
-            fatalError("Unable to access base directory.")
-        }
-        
-        // Create the logs directory
-        let logsDirectory = baseDirectory.appendingPathComponent("logs")
-        do {
-            try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
-        } catch {
-            logger.error("Error creating logs directory - Error: \(error)")
-        }
-        
-        // Set the log file URL to the logs directory
-        self.logFileURL = logsDirectory.appendingPathComponent("logs.txt")
-        
-        
-        func fileCreation(lineCount: Int) async {
-            // Create a new log file if it already exists
-            if await FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
-                await self.createNewLogFile()
-            } else if await !FileManager.default.fileExists(atPath: logFileURL.path) {
-                // Create the log file if it doesn't exist
-                await FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+            
+            guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
+                fatalError("Unable to access base directory.")
             }
-        }
-        
-        Task {
-        do {
-            let fileContents = try await String(contentsOf: logFileURL, encoding: .utf8)
-            let lineCount = fileContents.components(separatedBy: .newlines).count
-                await fileCreation(lineCount: lineCount)
-        } catch {
-                await fileCreation(lineCount: 0)
+            
+            let logsDirectory = baseDirectory.appendingPathComponent("Logs/NeedleTailLogger/\(logger.label)")
+            do {
+                try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
+            } catch {
+                logger.error("Error creating logs directory - Error: \(error)")
+            }
+            
+            logToFile.setLogFileURL(logsDirectory.appendingPathComponent("logs.txt"))
+            
+            guard let logFileURL = logToFile.getLogFileURL() else { return }
+            
+            func fileCreation(lineCount: Int) {
+                if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
+                    self.createNewLogFile()
+                } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                    FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+                }
+            }
+            
+            do {
+                let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
+                let lineCount = fileContents.components(separatedBy: .newlines).count
+                fileCreation(lineCount: lineCount)
+            } catch {
+                fileCreation(lineCount: 0)
             }
         }
     }
     
-    public func setLogLevel(_ level: Logger.Level) {
+    public mutating func setLogLevel(_ level: Logger.Level) {
         logger.logLevel = level
         logger.info("Log level set to \(level)")
     }
     
-    public func setWriteToFile(_ shouldWrite: Bool) {
-        writeToFile = shouldWrite
-    }
-    
     public func deleteLogFiles() {
-        let logsDirectory = logFileURL.deletingLastPathComponent() // Get the logs directory
+        guard let logFileURL = logToFile.getLogFileURL() else { return }
+        let logsDirectory = logFileURL.deletingLastPathComponent()
         
         do {
-            // Get the contents of the logs directory
             let fileURLs = try FileManager.default.contentsOfDirectory(at: logsDirectory, includingPropertiesForKeys: nil)
-            
-            // Iterate through the files and delete them
             for fileURL in fileURLs {
                 try FileManager.default.removeItem(at: fileURL)
                 logger.info("Deleted log file: \(fileURL.lastPathComponent)")
             }
-            
             logger.info("All log files deleted successfully.")
         } catch {
             logger.error("Failed to delete log files: \(error.localizedDescription)")
@@ -103,52 +126,90 @@ public actor NeedleTailLogger {
     public func log(
         level: Logger.Level,
         message: Logger.Message,
-        metadata: Logger.Metadata? = nil
-    ) async {
-        guard level >= logger.logLevel else { return } // Only log if the level is greater than or equal to the current log level
+        metadata: Logger.Metadata? = nil,
+        displayIcons: Bool = true
+    ) {
+        guard level >= logger.logLevel else { return }
+        
+        let formattedMessage = formatLogMessage(level: level, message: message)
         
         switch level {
         case .trace:
-            logger.trace(message, metadata: metadata)
+            logger.trace("\(displayIcons ? "🫆 " : "")\(formattedMessage)", metadata: metadata)
         case .debug:
 #if DEBUG
-            logger.debug("\n--------------------\n \(message)\n--------------------", metadata: metadata)
+            logger.debug("\n-----------------------------------------\n\(displayIcons ? "🪳 " : "")\(formattedMessage)\n-----------------------------------------", metadata: metadata)
 #else
             break
 #endif
         case .info:
-            logger.info(message, metadata: metadata)
+            logger.info("\(displayIcons ? "ℹ️ " : "")\(formattedMessage)", metadata: metadata)
         case .notice:
-            logger.notice(message, metadata: metadata)
+            logger.notice("\(displayIcons ? "📣 " : "")\(formattedMessage)", metadata: metadata)
         case .warning:
-            logger.warning(message, metadata: metadata)
+            logger.warning("\(displayIcons ? "⚠️ " : "")\(formattedMessage)", metadata: metadata)
         case .error:
-            logger.error("\(message.description.uppercased())", metadata: metadata)
+            logger.error("\(displayIcons ? "❌ " : "")\(formattedMessage.uppercased())", metadata: metadata)
         case .critical:
-            logger.critical(message, metadata: metadata)
+            logger.critical("\(displayIcons ? "🚨 " : "")\(formattedMessage)", metadata: metadata)
         }
         
         if writeToFile {
-            await logMessage(message.description)
+            logMessage(formattedMessage)
         }
     }
     
-    private func logMessage(_ message: String) async {
+    private func formatLogMessage(level: Logger.Level, message: Logger.Message) -> String {
+        // Create the base log message
+        let formattedMessage = "\(message)"
+        
+        // Handle pagination by breaking long messages into multiple lines
+        return paginateMessage(formattedMessage)
+    }
+    
+    private func paginateMessage(_ message: String) -> String {
+        var paginatedMessage = ""
+        var currentLine = ""
+        
+        // Split the message into words
+        let words = message.split(separator: " ")
+        
+        for word in words {
+            // Check if adding the next word exceeds the max line length
+            if currentLine.count + word.count + 1 > maxLineLength {
+                // If it does, add the current line to the paginated message and start a new line
+                paginatedMessage += currentLine + "\n"
+                currentLine = ""
+            }
+            // Add the word to the current line
+            if currentLine.isEmpty {
+                currentLine += String(word)
+            } else {
+                currentLine += " " + String(word)
+            }
+        }
+        
+        // Add any remaining text in the current line
+        if !currentLine.isEmpty {
+            paginatedMessage += currentLine
+        }
+        
+        return paginatedMessage
+    }
+    
+    private func logMessage(_ message: String) {
         do {
-            // Read the current contents of the log file to check the line count
+            guard let logFileURL = logToFile.getLogFileURL() else { return }
             let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
             let lineCount = fileContents.components(separatedBy: .newlines).count
             
-            // If current file exceeds maxLines, create a new file
             if lineCount >= maxLines {
                 createNewLogFile()
             }
             
-            // Write the log message to the current log file
             let fileHandle = try FileHandle(forWritingTo: logFileURL)
             defer { fileHandle.closeFile() }
             
-            // Move to the end of the file and write the message
             fileHandle.seekToEndOfFile()
             if let data = (message + "\n").data(using: .utf8) {
                 fileHandle.write(data)
@@ -159,17 +220,16 @@ public actor NeedleTailLogger {
     }
     
     private func createNewLogFile() {
+        guard let logFileURL = logToFile.getLogFileURL() else { return }
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let newLogFileName = "logs_\(timestamp).txt".replacingOccurrences(of: ":", with: "-") // Replace colons for filename safety
+        let newLogFileName = "logs_\(timestamp).txt".replacingOccurrences(of: ":", with: "-")
         let newLogFileURL = logFileURL.deletingLastPathComponent().appendingPathComponent(newLogFileName)
         
-        // Create the new log file
         if !FileManager.default.fileExists(atPath: newLogFileURL.path) {
             FileManager.default.createFile(atPath: newLogFileURL.path, contents: nil, attributes: nil)
             logger.info("Created new log file: \(newLogFileName)")
         }
         
-        // Optionally, write a message to the new log file indicating that a new log file has been created
         do {
             let handle = try FileHandle(forWritingTo: newLogFileURL)
             defer { handle.closeFile() }
@@ -180,8 +240,6 @@ public actor NeedleTailLogger {
         } catch {
             logger.error("Failed to write to new log file: \(error.localizedDescription)")
         }
-        
-        // Update the logFileURL to point to the new log file
-        self.logFileURL = newLogFileURL
+        logToFile.setLogFileURL(newLogFileURL)
     }
 }
