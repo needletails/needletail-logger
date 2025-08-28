@@ -1,10 +1,9 @@
 import Testing
-import Logging
 @testable import NeedleTailLogger
 
 actor LoggerTests {
     
-    var logMessages: [Logger.Message] = []
+    var logMessages: [Message] = []
     
     
     @Test
@@ -12,13 +11,13 @@ actor LoggerTests {
         let logger = NeedleTailLogger()
         let logCount = 3000
         
-        var allMessages: [[Logger.Message]] = Array(repeating: [], count: logCount)
+        var allMessages: [[Message]] = Array(repeating: [], count: logCount)
         
-        await withTaskGroup(of: (Int, [Logger.Message]).self) { group in
+        await withTaskGroup(of: (Int, [Message]).self) { group in
             for i in 0..<logCount {
                 group.addTask {
                     let message = "LOG MESSAGE \(i)"
-                    var messages: [Logger.Message] = []
+                    var messages: [Message] = []
                     
                     logger.log(level: .trace, message: "\(message)")
                     messages.append("\(message)")

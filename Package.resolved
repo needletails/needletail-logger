@@ -1,6 +1,24 @@
 {
-  "originHash" : "cb93b2ad80e446bf920d1378a42933e5e7527233e18fa38de4bbdbd199de1901",
+  "originHash" : "8088889db4e01f79d581d8ceadeb691b7a0698ae5dd1c624c588ea22251d5a2c",
   "pins" : [
+    {
+      "identity" : "swift-android-native",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/skiptools/swift-android-native.git",
+      "state" : {
+        "revision" : "8bfa631886b4dd1f9e3fc3f43d653a71b6d19295",
+        "version" : "1.4.3"
+      }
+    },
+    {
+      "identity" : "swift-jni",
+      "kind" : "remoteSourceControl",
+      "location" : "https://source.skip.tools/swift-jni.git",
+      "state" : {
+        "revision" : "747b4999e9426bafb6fa676f5989b33694fba8ad",
+        "version" : "0.3.0"
+      }
+    },
     {
       "identity" : "swift-log",
       "kind" : "remoteSourceControl",
