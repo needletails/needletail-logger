@@ -40,6 +40,11 @@ actor LoggerTests {
                     logger.log(level: .critical, message: "\(message)")
                     messages.append("\(message)")
                     
+                    logger.log(level: .error, message: "Failed to encode DirectMessage", metadata: [
+                        "messageType": "Test",
+                        "error": "Error"
+                    ])
+                    
                     return (i, messages)
                 }
             }

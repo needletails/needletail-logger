@@ -174,18 +174,17 @@ public struct NeedleTailLogger: Sendable {
 #endif
         }
     }
-    
-#if os(Android)
+
     public mutating func setLogLevel(_ level: Level) {
+#if os(Android)
         logLevel = level
         androidLog(priority: ANDROID_LOG_INFO, message: "Log level set to \(level)")
-    }
 #else
-    public mutating func setLogLevel(_ level: Logging.Logger.Level) {
-        logger.logLevel = level
+        logger.logLevel = Logger.Level(rawValue: level.rawValue) ?? .debug
         logger.info("Log level set to \(level)")
-    }
 #endif
+    }
+
     
 #if !os(Android)
     public func deleteLogFiles() {
@@ -483,6 +482,7 @@ extension Logger.Metadata {
         self = out
     }
 }
+#endif
 
 extension MetadataValue: ExpressibleByStringLiteral {
     public typealias StringLiteralType = String
@@ -516,7 +516,6 @@ extension MetadataValue: ExpressibleByDictionaryLiteral {
         self = .dictionary(.init(uniqueKeysWithValues: elements))
     }
 }
-#endif
 
 public struct Message: ExpressibleByStringLiteral, Equatable, CustomStringConvertible, ExpressibleByStringInterpolation, Sendable {
     public typealias StringLiteralType = String
