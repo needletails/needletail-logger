@@ -22,7 +22,7 @@ let package = Package(
         .target(
             name: "NeedleTailLogger",
                 dependencies: [
-                    .product(name: "Logging", package: "swift-log", condition: .when(platforms: [.iOS, .macOS, .tvOS, .watchOS])),
+                    .product(name: "Logging", package: "swift-log", condition: .when(platforms: [.iOS, .macOS, .tvOS, .watchOS, .linux])),
                     .product(name: "AndroidLogging", package: "swift-android-native", condition: .when(platforms: [.android]))
                 ]
         ),
