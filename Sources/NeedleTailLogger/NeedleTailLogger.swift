@@ -5,13 +5,12 @@
 //  Created by Cole M on 4/12/24.
 //
 import Foundation
-
 #if os(Android)
 import Android
 import AndroidNDK
 import AndroidLogging
 #else
-import Logging
+@_exported import Logging
 #endif
 
 public struct NeedleTailLogger: Sendable {

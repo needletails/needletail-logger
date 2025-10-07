@@ -13,8 +13,8 @@ let package = Package(
             targets: ["NeedleTailLogger"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.1"),
-        .package(url: "https://github.com/skiptools/swift-android-native.git", from: "1.0.0")
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
+        .package(url: "https://github.com/skiptools/swift-android-native.git", from: "1.4.3")
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
