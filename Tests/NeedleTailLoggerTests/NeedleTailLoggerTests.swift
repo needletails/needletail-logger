@@ -1,5 +1,7 @@
 import Testing
 @testable import NeedleTailLogger
+import Logging
+import Foundation
 
 actor LoggerTests {
     
@@ -68,5 +70,69 @@ actor LoggerTests {
         }
         
         #expect(logMessages.count / 7 == logCount)
+    }
+
+    @Test
+    func testSetLogLevelFiltersOutput() async {
+        final class LogStore: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _messages: [String] = []
+
+            func append(_ message: String) {
+                lock.lock()
+                _messages.append(message)
+                lock.unlock()
+            }
+
+            func all() -> [String] {
+                lock.lock()
+                let out = _messages
+                lock.unlock()
+                return out
+            }
+        }
+
+        struct CapturingLogHandler: LogHandler {
+            var metadata: Logger.Metadata = [:]
+            var logLevel: Logger.Level = .trace
+
+            private let store: LogStore
+
+            init(store: LogStore) {
+                self.store = store
+            }
+
+            subscript(metadataKey key: String) -> Logger.MetadataValue? {
+                get { metadata[key] }
+                set { metadata[key] = newValue }
+            }
+
+            func log(
+                level: Logger.Level,
+                message: Logger.Message,
+                metadata: Logger.Metadata?,
+                source: String,
+                file: String,
+                function: String,
+                line: UInt
+            ) {
+                store.append(message.description)
+            }
+        }
+
+        let store = LogStore()
+        let baseLogger = Logger(label: "NeedleTailLoggerTests") { _ in
+            CapturingLogHandler(store: store)
+        }
+
+        var logger = NeedleTailLogger(baseLogger, level: .trace)
+
+        logger.setLogLevel(.error)
+        logger.log(level: .info, message: "should-not-log")
+        logger.log(level: .error, message: "should-log")
+
+        let captured = store.all().joined(separator: "\n").uppercased()
+        #expect(!captured.contains("SHOULD-NOT-LOG"))
+        #expect(captured.contains("SHOULD-LOG"))
     }
 }

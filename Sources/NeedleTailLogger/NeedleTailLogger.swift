@@ -107,6 +107,7 @@ public struct NeedleTailLogger: Sendable {
         self.maxLines = maxLines
         self.maxLineLength = maxLineLength
         self.writeToFile = writeToFile
+        self.logLevel = Level(rawValue: level.rawValue) ?? .debug
         
         
         if writeToFile {
@@ -179,7 +180,8 @@ public struct NeedleTailLogger: Sendable {
         logLevel = level
         androidLog(priority: ANDROID_LOG_INFO, message: "Log level set to \(level)")
 #else
-        logger.logLevel = Logger.Level(rawValue: level.rawValue) ?? .debug
+        // Keep internal filtering (`logLevel`) and backend filtering (`logger.logLevel`) in sync.
+        logLevel = level
         logger.info("Log level set to \(level)")
 #endif
     }
