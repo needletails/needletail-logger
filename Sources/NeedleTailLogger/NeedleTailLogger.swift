@@ -243,11 +243,8 @@ public struct NeedleTailLogger: Sendable {
         let androidMessage: String = {
             switch level {
             case .debug:
-                #if DEBUG
-                return "\n-----------------------------------------\n\(icon)\(formattedMessage)\n-----------------------------------------"
-                #else
-                return "" // debug suppressed in Release
-                #endif
+                // Unlike Apple platforms, Android release builds need these lines in logcat for networking/auth diagnosis.
+                return "\(icon)\(formattedMessage)"
             case .error:
                 return "\(icon)\(formattedMessage.uppercased())"
             default:
@@ -255,8 +252,7 @@ public struct NeedleTailLogger: Sendable {
             }
         }()
 
-        // Only log if non-empty (ensures debug is suppressed in Release)
-        if !androidMessage.isEmpty { androidLog(priority: priority, message: androidMessage) }
+        androidLog(priority: priority, message: androidMessage)
 
     #else
         let meta = Logger.Metadata(metadata ?? [:])
