@@ -1,0 +1,63 @@
+# Mirrors https://github.com/skiptools/swift-android-native/blob/main/.github/workflows/ci.yml
+name: NeedleTailLogger CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  linux-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libcurl4-openssl-dev
+
+      - name: Install Swift with Swiftly
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -O https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz
+          tar zxf swiftly-$(uname -m).tar.gz
+          ./swiftly init --quiet-shell-followup
+          source ~/.local/share/swiftly/env.sh
+          swiftly install --use 6.2.1
+          SWIFT_PATH=$(find "$HOME/.local/share/swiftly/toolchains/6.2.1" -name "swift" -type f 2>/dev/null | head -1)
+          if [ -n "$SWIFT_PATH" ]; then
+            SWIFT_PATH=$(dirname "$SWIFT_PATH")
+          else
+            SWIFT_PATH="$HOME/.local/share/swiftly/bin"
+          fi
+          echo "SWIFT_PATH=$SWIFT_PATH" >> "$GITHUB_ENV"
+          echo "$SWIFT_PATH" >> "$GITHUB_PATH"
+
+      - name: Test Swift package on Linux
+        run: swift test
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: linux-android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test Swift package on Android
+        uses: skiptools/swift-android-action@v2
+        env:
+          SKIP_BRIDGE: "1"
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test Swift package on macOS
+        run: swift test

@@ -4,8 +4,12 @@
 import PackageDescription
 
 // swift-android-native 1.4+ transitively pulls swift-jni and does not build on Linux hosts.
-// Default resolution skips it (Android trait). Skip Android builds set SKIP_BRIDGE (see pqs-rtc).
-let enableAndroidViaSkip = (Context.environment["SKIP_BRIDGE"] ?? "0") != "0"
+// Only declare it when Skip builds the Android bridge (SKIP_BRIDGE, see pqs-rtc).
+let enableAndroidLogging = (Context.environment["SKIP_BRIDGE"] ?? "0") != "0"
+
+var packageDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
+]
 
 var needleTailLoggerDependencies: [Target.Dependency] = [
     .product(
@@ -15,20 +19,15 @@ var needleTailLoggerDependencies: [Target.Dependency] = [
     ),
 ]
 
-if enableAndroidViaSkip {
+if enableAndroidLogging {
+    packageDependencies.append(
+        .package(url: "https://github.com/skiptools/swift-android-native.git", from: "1.4.3")
+    )
     needleTailLoggerDependencies.append(
         .product(
             name: "AndroidLogging",
             package: "swift-android-native",
             condition: .when(platforms: [.android])
-        )
-    )
-} else {
-    needleTailLoggerDependencies.append(
-        .product(
-            name: "AndroidLogging",
-            package: "swift-android-native",
-            condition: .when(platforms: [.android], traits: ["Android"])
         )
     )
 }
@@ -41,13 +40,7 @@ let package = Package(
             name: "NeedleTailLogger",
             targets: ["NeedleTailLogger"]),
     ],
-    traits: [
-        .trait(name: "Android"),
-    ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
-        .package(url: "https://github.com/skiptools/swift-android-native.git", from: "1.4.3"),
-    ],
+    dependencies: packageDependencies,
     targets: [
         .target(
             name: "NeedleTailLogger",

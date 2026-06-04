@@ -1,64 +1,97 @@
 import Testing
 @testable import NeedleTailLogger
-import Logging
 import Foundation
+#if !os(Android)
+import Logging
+#endif
+
+/// Same pattern as `AndroidLoggingTests` in swift-android-native: one test suite calls the
+/// public logging API on every platform; implementation differences stay inside the library.
+struct NeedleTailLoggerAPITests {
+    @Test
+    func loggerExercisesAllLevels() {
+        #if os(Android)
+        var logger = NeedleTailLogger(
+            subsystem: "NeedleTailLoggerTests",
+            category: "api",
+            level: Level.trace
+        )
+        #else
+        var logger = NeedleTailLogger("[NeedleTailLoggerTests/api]", level: Level.trace)
+        #endif
+
+        logger.log(level: Level.trace, message: "trace")
+        logger.log(level: Level.debug, message: "debug")
+        logger.log(level: Level.info, message: "info")
+        logger.log(level: Level.notice, message: "notice")
+        logger.log(level: Level.warning, message: "warning")
+        logger.log(level: Level.error, message: "error")
+        logger.log(level: Level.critical, message: "critical")
+
+        logger.setLogLevel(Level.warning)
+        logger.log(level: Level.info, message: "filtered")
+        logger.log(level: Level.error, message: "kept")
+
+        #expect(logger.logLevel == Level.warning)
+    }
+}
 
 actor LoggerTests {
-    
+
     var logMessages: [Message] = []
-    
-    
+
+
     @Test
     func testLogLevels() async {
         let logger = NeedleTailLogger()
         let logCount = 3000
-        
+
         var allMessages: [[Message]] = Array(repeating: [], count: logCount)
-        
+
         await withTaskGroup(of: (Int, [Message]).self) { group in
             for i in 0..<logCount {
                 group.addTask {
                     let message = "LOG MESSAGE \(i)"
                     var messages: [Message] = []
-                    
+
                     logger.log(level: .trace, message: "\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .debug, message: "\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .info, message: "\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .notice, message: "\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .warning, message:"\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .error, message: "\(message)")
                     messages.append("\(message.uppercased())")
-                    
+
                     logger.log(level: .critical, message: "\(message)")
                     messages.append("\(message)")
-                    
+
                     logger.log(level: .error, message: "Failed to encode DirectMessage", metadata: [
                         "messageType": "Test",
                         "error": "Error"
                     ])
-                    
+
                     return (i, messages)
                 }
             }
-            
+
             for await (i, messages) in group {
                 allMessages[i] = messages
             }
         }
-        
+
         // Flatten all collected messages
         self.logMessages = allMessages.flatMap { $0 }
-        
+
         for i in 0..<logCount {
             #expect(logMessages[i * 7 + 0] == "LOG MESSAGE \(i)")
             #expect(logMessages[i * 7 + 1] == "LOG MESSAGE \(i)")
@@ -68,10 +101,11 @@ actor LoggerTests {
             #expect(logMessages[i * 7 + 5] == "LOG MESSAGE \(i)")
             #expect(logMessages[i * 7 + 6] == "LOG MESSAGE \(i)")
         }
-        
+
         #expect(logMessages.count / 7 == logCount)
     }
 
+    #if !os(Android)
     @Test
     func testSetLogLevelFiltersOutput() async {
         final class LogStore: @unchecked Sendable {
@@ -135,4 +169,5 @@ actor LoggerTests {
         #expect(!captured.contains("SHOULD-NOT-LOG"))
         #expect(captured.contains("SHOULD-LOG"))
     }
+    #endif
 }
