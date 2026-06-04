@@ -10,15 +10,11 @@ import Logging
 struct NeedleTailLoggerAPITests {
     @Test
     func loggerExercisesAllLevels() {
-        #if os(Android)
         var logger = NeedleTailLogger(
+            "api",
             subsystem: "NeedleTailLoggerTests",
-            category: "api",
             level: Level.trace
         )
-        #else
-        var logger = NeedleTailLogger("[NeedleTailLoggerTests/api]", level: Level.trace)
-        #endif
 
         logger.log(level: Level.trace, message: "trace")
         logger.log(level: Level.debug, message: "debug")
