@@ -165,5 +165,84 @@ actor LoggerTests {
         #expect(!captured.contains("SHOULD-NOT-LOG"))
         #expect(captured.contains("SHOULD-LOG"))
     }
+
+    @Test
+    func testCustomLogFileURLWritesMessages() throws {
+        let logFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NeedleTailLoggerTests-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: logFile) }
+
+        let logger = NeedleTailLogger("[CustomLogFile]", logFileURL: logFile)
+
+        #expect(logger.activeLogFileURL == logFile)
+        logger.log(level: .info, message: "persisted-to-custom-file")
+
+        let contents = try String(contentsOf: logFile, encoding: .utf8)
+        #expect(contents.contains("NeedleTailLogger.fileLog=\(logFile.path)"))
+        #expect(contents.contains("persisted-to-custom-file"))
+    }
+
+    @Test
+    func testCustomLogFileURLAnnouncesPathAtDebug() throws {
+        final class LogStore: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _messages: [String] = []
+
+            func append(_ message: String) {
+                lock.lock()
+                _messages.append(message)
+                lock.unlock()
+            }
+
+            func all() -> [String] {
+                lock.lock()
+                let out = _messages
+                lock.unlock()
+                return out
+            }
+        }
+
+        struct CapturingLogHandler: LogHandler {
+            var metadata: Logger.Metadata = [:]
+            var logLevel: Logger.Level = .trace
+
+            private let store: LogStore
+
+            init(store: LogStore) {
+                self.store = store
+            }
+
+            subscript(metadataKey key: String) -> Logger.MetadataValue? {
+                get { metadata[key] }
+                set { metadata[key] = newValue }
+            }
+
+            func log(
+                level: Logger.Level,
+                message: Logger.Message,
+                metadata: Logger.Metadata?,
+                source: String,
+                file: String,
+                function: String,
+                line: UInt
+            ) {
+                store.append(message.description)
+            }
+        }
+
+        let logFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NeedleTailLoggerTests-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: logFile) }
+
+        let store = LogStore()
+        let baseLogger = Logger(label: "NeedleTailLoggerTests.customFile") { _ in
+            CapturingLogHandler(store: store)
+        }
+
+        let logger = NeedleTailLogger(baseLogger, level: .debug, logFileURL: logFile)
+        let captured = store.all().joined(separator: "\n")
+
+        #expect(captured.contains("NeedleTailLogger.fileLog=\(logFile.path)"))
+    }
     #endif
 }

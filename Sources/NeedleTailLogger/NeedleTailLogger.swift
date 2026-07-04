@@ -27,6 +27,7 @@ public struct NeedleTailLogger: Sendable {
     
     private class LogToFile: @unchecked Sendable {
         private var logFileURL: URL?
+        private var lineCount = 0
         private var mutex = pthread_mutex_t()
         
         init() {
@@ -37,12 +38,13 @@ public struct NeedleTailLogger: Sendable {
             pthread_mutex_destroy(&mutex)
         }
         
-        func setLogFileURL(_ url: URL) {
+        func setLogFileURL(_ url: URL, initialLineCount: Int = 0) {
             pthread_mutex_lock(&mutex)
             defer {
                 pthread_mutex_unlock(&mutex)
             }
             self.logFileURL = url
+            self.lineCount = initialLineCount
         }
         
         func getLogFileURL() -> URL? {
@@ -52,6 +54,43 @@ public struct NeedleTailLogger: Sendable {
             }
             let url = self.logFileURL
             return url
+        }
+
+        func appendLine(_ line: String, maxLines: Int, rotate: () -> Void) {
+            var shouldRotate = false
+            pthread_mutex_lock(&mutex)
+            if lineCount >= maxLines {
+                shouldRotate = true
+            }
+            pthread_mutex_unlock(&mutex)
+
+            if shouldRotate {
+                rotate()
+            }
+
+            pthread_mutex_lock(&mutex)
+            defer {
+                pthread_mutex_unlock(&mutex)
+            }
+
+            guard let logFileURL else { return }
+
+            do {
+                if !FileManager.default.fileExists(atPath: logFileURL.path) {
+                    FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+                    lineCount = 0
+                }
+
+                let fileHandle = try FileHandle(forWritingTo: logFileURL)
+                defer { fileHandle.closeFile() }
+                fileHandle.seekToEndOfFile()
+                if let data = (line + "\n").data(using: .utf8) {
+                    fileHandle.write(data)
+                    lineCount += 1
+                }
+            } catch {
+                // File logging is best-effort; backend logger handles surfacing errors.
+            }
         }
     }
 #endif
@@ -63,7 +102,8 @@ public struct NeedleTailLogger: Sendable {
         level: Level = .debug,
         maxLines: Int = 1000,
         maxLineLength: Int = 80,
-        writeToFile: Bool = false
+        writeToFile: Bool = false,
+        logFileURL: URL? = nil
     ) {
 #if os(Android)
         self.init(subsystem: subsystem, category: label, level: level)
@@ -73,7 +113,8 @@ public struct NeedleTailLogger: Sendable {
             level: Logger.Level(rawValue: level.rawValue) ?? .debug,
             maxLines: maxLines,
             maxLineLength: maxLineLength,
-            writeToFile: writeToFile)
+            writeToFile: writeToFile,
+            logFileURL: logFileURL)
 #endif
     }
     
@@ -94,60 +135,72 @@ public struct NeedleTailLogger: Sendable {
 #endif
     
 #if !os(Android)
+    /// Resolved on-disk log file when file logging is enabled; `nil` otherwise.
+    public var activeLogFileURL: URL? {
+        logToFile.getLogFileURL()
+    }
+
     public init(
         _ logger: Logger = Logger(label: "[NeedleTailLogging]"),
         level: Logger.Level = .debug,
         maxLines: Int = 1000,
         maxLineLength: Int = 80,
-        writeToFile: Bool = false
+        writeToFile: Bool = false,
+        logFileURL: URL? = nil
     ) {
         var logger = logger
         logger.logLevel = level
         self.logger = logger
         self.maxLines = maxLines
         self.maxLineLength = maxLineLength
-        self.writeToFile = writeToFile
+        let shouldWriteToFile = writeToFile || logFileURL != nil
+        self.writeToFile = shouldWriteToFile
         self.logLevel = Level(rawValue: level.rawValue) ?? .debug
-        
-        
-        if writeToFile {
-            let directory: FileManager.SearchPathDirectory
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-            directory = .libraryDirectory
-#else
-            directory = .documentDirectory // Use document directory for Linux
-#endif
-            
-            guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
-                fatalError("Unable to access base directory.")
-            }
-            
-            let logsDirectory = baseDirectory.appendingPathComponent("Logs/NeedleTailLogger/\(logger.label)")
-            do {
-                try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
-            } catch {
-                logger.error("Error creating logs directory - Error: \(error)")
-            }
-            
-            logToFile.setLogFileURL(logsDirectory.appendingPathComponent("logs.txt"))
-            
-            guard let logFileURL = logToFile.getLogFileURL() else { return }
-            
-            func fileCreation(lineCount: Int) {
-                if FileManager.default.fileExists(atPath: logFileURL.path), lineCount >= maxLines {
-                    self.createNewLogFile()
-                } else if !FileManager.default.fileExists(atPath: logFileURL.path) {
-                    FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+
+        if shouldWriteToFile {
+            let resolvedLogFileURL: URL
+            if let logFileURL {
+                resolvedLogFileURL = logFileURL
+                let parentDirectory = logFileURL.deletingLastPathComponent()
+                do {
+                    try FileManager.default.createDirectory(
+                        at: parentDirectory,
+                        withIntermediateDirectories: true,
+                        attributes: nil)
+                } catch {
+                    logger.error("Error creating custom log file directory - Error: \(error)")
                 }
+            } else {
+                let directory: FileManager.SearchPathDirectory
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+                directory = .libraryDirectory
+#else
+                directory = .documentDirectory // Use document directory for Linux
+#endif
+
+                guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
+                    logger.error("Unable to access base directory; file logging disabled")
+                    self.writeToFile = false
+                    return
+                }
+
+                let logsDirectory = baseDirectory.appendingPathComponent("Logs/NeedleTailLogger/\(logger.label)")
+                do {
+                    try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
+                } catch {
+                    logger.error("Error creating logs directory - Error: \(error)")
+                }
+
+                resolvedLogFileURL = logsDirectory.appendingPathComponent("logs.txt")
             }
-            
-            do {
-                let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
-                let lineCount = fileContents.components(separatedBy: .newlines).count
-                fileCreation(lineCount: lineCount)
-            } catch {
-                fileCreation(lineCount: 0)
-            }
+
+            let initialLineCount = prepareLogFileIfNeeded(at: resolvedLogFileURL)
+            logToFile.setLogFileURL(resolvedLogFileURL, initialLineCount: initialLineCount)
+
+            log(
+                level: .debug,
+                message: "NeedleTailLogger.fileLog=\(resolvedLogFileURL.path)",
+                displayIcons: false)
         }
     }
 #endif
@@ -322,26 +375,34 @@ public struct NeedleTailLogger: Sendable {
     }
     
 #if !os(Android)
-    private func logMessage(_ message: String) {
-        do {
-            guard let logFileURL = logToFile.getLogFileURL() else { return }
-            let fileContents = try String(contentsOf: logFileURL, encoding: .utf8)
-            let lineCount = fileContents.components(separatedBy: .newlines).count
-            
-            if lineCount >= maxLines {
-                createNewLogFile()
+    @discardableResult
+    private func prepareLogFileIfNeeded(at logFileURL: URL) -> Int {
+        if FileManager.default.fileExists(atPath: logFileURL.path) {
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: logFileURL.path),
+               let size = attributes[.size] as? NSNumber,
+               size.intValue == 0 {
+                return 0
             }
-            
-            let fileHandle = try FileHandle(forWritingTo: logFileURL)
-            defer { fileHandle.closeFile() }
-            
-            fileHandle.seekToEndOfFile()
-            if let data = (message + "\n").data(using: .utf8) {
-                fileHandle.write(data)
+
+            if let fileContents = try? String(contentsOf: logFileURL, encoding: .utf8) {
+                let lineCount = fileContents.components(separatedBy: .newlines).filter { !$0.isEmpty }.count
+                if lineCount >= maxLines {
+                    createNewLogFile()
+                    return 0
+                }
+                return lineCount
             }
-        } catch {
-            logger.error("Failed to write to log file: \(error.localizedDescription)")
+            return 0
         }
+
+        FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
+        return 0
+    }
+
+    private func logMessage(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(message)"
+        logToFile.appendLine(line, maxLines: maxLines, rotate: createNewLogFile)
     }
     
     private func createNewLogFile() {
@@ -365,7 +426,7 @@ public struct NeedleTailLogger: Sendable {
         } catch {
             logger.error("Failed to write to new log file: \(error.localizedDescription)")
         }
-        logToFile.setLogFileURL(newLogFileURL)
+        logToFile.setLogFileURL(newLogFileURL, initialLineCount: 1)
     }
 #endif
     
