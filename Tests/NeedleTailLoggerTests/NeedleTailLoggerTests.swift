@@ -176,9 +176,9 @@ struct NeedleTailLoggerFileTests {
     }
 }
 
-// Exit tests need Swift 6.2, and Swift Testing has none on Android. The lines under test are
-// the same code on every platform.
-#if compiler(>=6.2) && (os(macOS) || os(Linux))
+// Exit tests need Swift 6.2, Swift Testing has none on Android, and the size limit call is
+// typed differently on Linux. The lines under test are the same code on every platform.
+#if compiler(>=6.2) && os(macOS)
 struct NeedleTailLoggerRefusedWriteTests {
     /// A write the system refuses (a full disk) drops the line; it must not end the process.
     /// Runs in a child process: the size limit that makes every write fail is process-wide.
