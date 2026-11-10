@@ -85,12 +85,12 @@ public struct NeedleTailLogger: Sendable {
                 }
 
                 let fileHandle = try FileHandle(forWritingTo: logFileURL)
-                defer { fileHandle.closeFile() }
-                fileHandle.seekToEndOfFile()
-                if let data = (line + "\n").data(using: .utf8) {
-                    fileHandle.write(data)
-                    lineCount += 1
-                }
+                defer { try? fileHandle.close() }
+                // The throwing calls: the older ones end the process when the system
+                // refuses a write, on a full disk for one.
+                try fileHandle.seekToEnd()
+                try fileHandle.write(contentsOf: Data((line + "\n").utf8))
+                lineCount += 1
             } catch {
                 // File logging is best-effort; backend logger handles surfacing errors.
             }

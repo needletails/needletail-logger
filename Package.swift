@@ -34,7 +34,7 @@ if enableAndroidLogging {
 
 let package = Package(
     name: "needletail-logger",
-    platforms: [.iOS(.v13), .macOS(.v12), .tvOS(.v15), .watchOS(.v8)],
+    platforms: [.iOS("13.4"), .macOS(.v12), .tvOS(.v15), .watchOS(.v8)],
     products: [
         .library(
             name: "NeedleTailLogger",

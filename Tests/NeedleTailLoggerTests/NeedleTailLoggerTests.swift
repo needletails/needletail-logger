@@ -145,6 +145,27 @@ struct NeedleTailLoggerFileTests {
         #expect(names.contains { $0.hasPrefix("connection_") && $0.hasSuffix(".txt") })
     }
 
+    /// Two rotations in the same second ask for the same set-aside name. The second must not
+    /// replace the first: its line goes into the file as it is, and a later line tries again.
+    @Test
+    func rotationsInTheSameSecondKeepEveryLine() throws {
+        let logFile = temporaryLogFile()
+        let folder = logFile.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let logger = NeedleTailLogger("[Burst]", level: .info, maxLines: 1, maxLineLength: 512, logFileURL: logFile)
+        for index in 0..<4 {
+            logger.log(level: .info, message: "line \(index)", displayIcons: false)
+        }
+
+        let kept = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .flatMap { try lines(of: folder.appendingPathComponent($0)) }
+        #expect(kept.count == 4)
+        for index in 0..<4 {
+            #expect(kept.filter { $0.hasSuffix("] line \(index)") }.count == 1)
+        }
+    }
+
     @Test
     func theDefaultFolderIsNamedForTheLabel() throws {
         let folder = try #require(NeedleTailLogger.defaultLogDirectory(label: "[Connection]"))
@@ -154,6 +175,31 @@ struct NeedleTailLoggerFileTests {
 #endif
     }
 }
+
+// Exit tests need Swift 6.2, and Swift Testing has none on Android. The lines under test are
+// the same code on every platform.
+#if compiler(>=6.2) && (os(macOS) || os(Linux))
+struct NeedleTailLoggerRefusedWriteTests {
+    /// A write the system refuses (a full disk) drops the line; it must not end the process.
+    /// Runs in a child process: the size limit that makes every write fail is process-wide.
+    @Test
+    func aRefusedWriteDropsTheLine() async {
+        await #expect(processExitsWith: .success) {
+            let logFile = FileManager.default.temporaryDirectory
+                .appendingPathComponent("NeedleTailLoggerTests-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent("logs.txt")
+            defer { try? FileManager.default.removeItem(at: logFile.deletingLastPathComponent()) }
+            let logger = NeedleTailLogger("[Refused]", logFileURL: logFile)
+
+            // From here no file in this process may grow, so the next append is refused.
+            signal(SIGXFSZ, SIG_IGN)
+            var none = rlimit(rlim_cur: 0, rlim_max: 0)
+            setrlimit(RLIMIT_FSIZE, &none)
+            logger.log(level: .info, message: "dropped")
+        }
+    }
+}
+#endif
 
 actor LoggerTests {
 
