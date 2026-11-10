@@ -20,11 +20,12 @@ public struct NeedleTailLogger: Sendable {
     private let maxLines: Int
     private let maxLineLength: Int
     
-#if !os(Android)
     private let logToFile = LogToFile()
+    private var writeToFile = false
+#if !os(Android)
     private var logger: Logger
-    private var writeToFile: Bool
-    
+#endif
+
     private class LogToFile: @unchecked Sendable {
         private var logFileURL: URL?
         private var lineCount = 0
@@ -56,24 +57,26 @@ public struct NeedleTailLogger: Sendable {
             return url
         }
 
-        func appendLine(_ line: String, maxLines: Int, rotate: () -> Void) {
-            var shouldRotate = false
-            pthread_mutex_lock(&mutex)
-            if lineCount >= maxLines {
-                shouldRotate = true
-            }
-            pthread_mutex_unlock(&mutex)
-
-            if shouldRotate {
-                rotate()
-            }
-
+        func appendLine(_ line: String, maxLines: Int) {
             pthread_mutex_lock(&mutex)
             defer {
                 pthread_mutex_unlock(&mutex)
             }
 
             guard let logFileURL else { return }
+
+            if lineCount >= maxLines {
+                // Full: set it aside under its own name and the time, and start it again.
+                // The file asked for always holds the newest lines. If the move fails the
+                // line still goes into the full file, and the next line tries again.
+                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+                let name = logFileURL.deletingPathExtension().lastPathComponent
+                let type = logFileURL.pathExtension.isEmpty ? "" : "." + logFileURL.pathExtension
+                let setAside = logFileURL.deletingLastPathComponent().appendingPathComponent("\(name)_\(stamp)\(type)")
+                if (try? FileManager.default.moveItem(at: logFileURL, to: setAside)) != nil {
+                    lineCount = 0
+                }
+            }
 
             do {
                 if !FileManager.default.fileExists(atPath: logFileURL.path) {
@@ -93,7 +96,6 @@ public struct NeedleTailLogger: Sendable {
             }
         }
     }
-#endif
     
     
     public init(
@@ -106,7 +108,12 @@ public struct NeedleTailLogger: Sendable {
         logFileURL: URL? = nil
     ) {
 #if os(Android)
-        self.init(subsystem: subsystem, category: label, level: level)
+        self.subsystem = subsystem
+        self.category = label
+        self.logLevel = level
+        self.maxLines = maxLines
+        self.maxLineLength = maxLineLength
+        startFileLogging(label: label, writeToFile: writeToFile, logFileURL: logFileURL)
 #else
         self.init(
             Logger(label: label),
@@ -118,28 +125,12 @@ public struct NeedleTailLogger: Sendable {
 #endif
     }
     
-#if os(Android)
-    private init(
-        subsystem: String,
-        category: String,
-        level: Level = .debug,
-        maxLines: Int = 1000,
-        maxLineLength: Int = 80
-    ) {
-        self.subsystem = subsystem
-        self.category = category
-        logLevel = level
-        self.maxLines = maxLines
-        self.maxLineLength = maxLineLength
-    }
-#endif
-    
-#if !os(Android)
     /// Resolved on-disk log file when file logging is enabled; `nil` otherwise.
     public var activeLogFileURL: URL? {
         logToFile.getLogFileURL()
     }
 
+#if !os(Android)
     public init(
         _ logger: Logger = Logger(label: "[NeedleTailLogging]"),
         level: Logger.Level = .debug,
@@ -153,57 +144,54 @@ public struct NeedleTailLogger: Sendable {
         self.logger = logger
         self.maxLines = maxLines
         self.maxLineLength = maxLineLength
-        let shouldWriteToFile = writeToFile || logFileURL != nil
-        self.writeToFile = shouldWriteToFile
         self.logLevel = Level(rawValue: level.rawValue) ?? .debug
-
-        if shouldWriteToFile {
-            let resolvedLogFileURL: URL
-            if let logFileURL {
-                resolvedLogFileURL = logFileURL
-                let parentDirectory = logFileURL.deletingLastPathComponent()
-                do {
-                    try FileManager.default.createDirectory(
-                        at: parentDirectory,
-                        withIntermediateDirectories: true,
-                        attributes: nil)
-                } catch {
-                    logger.error("Error creating custom log file directory - Error: \(error)")
-                }
-            } else {
-                let directory: FileManager.SearchPathDirectory
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-                directory = .libraryDirectory
-#else
-                directory = .documentDirectory // Use document directory for Linux
-#endif
-
-                guard let baseDirectory = FileManager.default.urls(for: directory, in: .userDomainMask).first else {
-                    logger.error("Unable to access base directory; file logging disabled")
-                    self.writeToFile = false
-                    return
-                }
-
-                let logsDirectory = baseDirectory.appendingPathComponent("Logs/NeedleTailLogger/\(logger.label)")
-                do {
-                    try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
-                } catch {
-                    logger.error("Error creating logs directory - Error: \(error)")
-                }
-
-                resolvedLogFileURL = logsDirectory.appendingPathComponent("logs.txt")
-            }
-
-            let initialLineCount = prepareLogFileIfNeeded(at: resolvedLogFileURL)
-            logToFile.setLogFileURL(resolvedLogFileURL, initialLineCount: initialLineCount)
-
-            log(
-                level: .debug,
-                message: "NeedleTailLogger.fileLog=\(resolvedLogFileURL.path)",
-                displayIcons: false)
-        }
+        startFileLogging(label: logger.label, writeToFile: writeToFile, logFileURL: logFileURL)
     }
 #endif
+
+    /// The folder a logger with this label keeps `logs.txt` in when it is given no file of
+    /// its own.
+    public static func defaultLogDirectory(label: String) -> URL? {
+        let directory: FileManager.SearchPathDirectory
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+        directory = .libraryDirectory
+#elseif os(Android)
+        // The app's private files folder: Android has no Library folder.
+        directory = .applicationSupportDirectory
+#else
+        directory = .documentDirectory // Use document directory for Linux
+#endif
+        return FileManager.default.urls(for: directory, in: .userDomainMask).first?
+            .appendingPathComponent("Logs/NeedleTailLogger/\(label)")
+    }
+
+    /// Opens the log file when one was asked for. File logging is best effort: when its
+    /// folder cannot be found the logger keeps writing to its backend only.
+    private mutating func startFileLogging(label: String, writeToFile: Bool, logFileURL: URL?) {
+        guard writeToFile || logFileURL != nil else { return }
+        guard let fileURL = logFileURL
+                ?? Self.defaultLogDirectory(label: label)?.appendingPathComponent("logs.txt") else {
+            backend(.error, "Unable to access base directory; file logging disabled")
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil)
+        } catch {
+            backend(.error, "Error creating logs directory - Error: \(error)")
+        }
+
+        self.writeToFile = true
+        let initialLineCount = prepareLogFileIfNeeded(at: fileURL)
+        logToFile.setLogFileURL(fileURL, initialLineCount: initialLineCount)
+
+        log(
+            level: .debug,
+            message: "NeedleTailLogger.fileLog=\(fileURL.path)",
+            displayIcons: false)
+    }
     
     var logLevel: Level = .debug {
         didSet {
@@ -229,18 +217,12 @@ public struct NeedleTailLogger: Sendable {
     }
 
     public mutating func setLogLevel(_ level: Level) {
-#if os(Android)
-        logLevel = level
-        androidLog(priority: ANDROID_LOG_INFO, message: "Log level set to \(level)")
-#else
         // Keep internal filtering (`logLevel`) and backend filtering (`logger.logLevel`) in sync.
         logLevel = level
-        logger.info("Log level set to \(level)")
-#endif
+        backend(.info, "Log level set to \(level)")
     }
 
     
-#if !os(Android)
     public func deleteLogFiles() {
         guard let logFileURL = logToFile.getLogFileURL() else { return }
         let logsDirectory = logFileURL.deletingLastPathComponent()
@@ -249,14 +231,13 @@ public struct NeedleTailLogger: Sendable {
             let fileURLs = try FileManager.default.contentsOfDirectory(at: logsDirectory, includingPropertiesForKeys: nil)
             for fileURL in fileURLs {
                 try FileManager.default.removeItem(at: fileURL)
-                logger.info("Deleted log file: \(fileURL.lastPathComponent)")
+                backend(.info, "Deleted log file: \(fileURL.lastPathComponent)")
             }
-            logger.info("All log files deleted successfully.")
+            backend(.info, "All log files deleted successfully.")
         } catch {
-            logger.error("Failed to delete log files: \(error.localizedDescription)")
+            backend(.error, "Failed to delete log files: \(error.localizedDescription)")
         }
     }
-#endif
     
     public func log(
         level: Level,
@@ -280,8 +261,15 @@ public struct NeedleTailLogger: Sendable {
         }()
         let line = "\(icon)\(formattedMessage)"
 
-    #if os(Android)
-        // Android priority mapping
+        backend(level, line, metadata: metadata)
+        if writeToFile {
+            logMessage(formattedMessage)
+        }
+    }
+
+    /// The platform's own log: swift-log, or the Android system log.
+    private func backend(_ level: Level, _ line: String, metadata: Metadata? = nil) {
+#if os(Android)
         let priority: android_LogPriority = {
             switch level {
             case .trace:    return ANDROID_LOG_VERBOSE
@@ -293,12 +281,10 @@ public struct NeedleTailLogger: Sendable {
             case .critical: return ANDROID_LOG_ERROR
             }
         }()
-
         androidLog(priority: priority, message: line)
-
-    #else
+#else
         let meta = Logger.Metadata(metadata ?? [:])
-        // Already filtered by `logLevel` above. Same line shape for every level —
+        // Already filtered by `logLevel`. Same line shape for every level:
         // no banners and no case-mangling (preserves identifiers / error text).
         switch level {
         case .trace:
@@ -316,11 +302,7 @@ public struct NeedleTailLogger: Sendable {
         case .critical:
             logger.critical("\(line)", metadata: meta)
         }
-
-        if writeToFile {
-            logMessage(formattedMessage)
-        }
-    #endif
+#endif
     }
 
     
@@ -362,7 +344,6 @@ public struct NeedleTailLogger: Sendable {
         return paginatedMessage
     }
     
-#if !os(Android)
     @discardableResult
     private func prepareLogFileIfNeeded(at logFileURL: URL) -> Int {
         if FileManager.default.fileExists(atPath: logFileURL.path) {
@@ -373,12 +354,7 @@ public struct NeedleTailLogger: Sendable {
             }
 
             if let fileContents = try? String(contentsOf: logFileURL, encoding: .utf8) {
-                let lineCount = fileContents.components(separatedBy: .newlines).filter { !$0.isEmpty }.count
-                if lineCount >= maxLines {
-                    createNewLogFile()
-                    return 0
-                }
-                return lineCount
+                return fileContents.components(separatedBy: .newlines).filter { !$0.isEmpty }.count
             }
             return 0
         }
@@ -390,33 +366,8 @@ public struct NeedleTailLogger: Sendable {
     private func logMessage(_ message: String) {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "[\(timestamp)] \(message)"
-        logToFile.appendLine(line, maxLines: maxLines, rotate: createNewLogFile)
+        logToFile.appendLine(line, maxLines: maxLines)
     }
-    
-    private func createNewLogFile() {
-        guard let logFileURL = logToFile.getLogFileURL() else { return }
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let newLogFileName = "logs_\(timestamp).txt".replacingOccurrences(of: ":", with: "-")
-        let newLogFileURL = logFileURL.deletingLastPathComponent().appendingPathComponent(newLogFileName)
-        
-        if !FileManager.default.fileExists(atPath: newLogFileURL.path) {
-            FileManager.default.createFile(atPath: newLogFileURL.path, contents: nil, attributes: nil)
-            logger.info("Created new log file: \(newLogFileName)")
-        }
-        
-        do {
-            let handle = try FileHandle(forWritingTo: newLogFileURL)
-            defer { handle.closeFile() }
-            let creationMessage = "New log file created on \(Date())\n"
-            if let data = creationMessage.data(using: .utf8) {
-                handle.write(data)
-            }
-        } catch {
-            logger.error("Failed to write to new log file: \(error.localizedDescription)")
-        }
-        logToFile.setLogFileURL(newLogFileURL, initialLineCount: 1)
-    }
-#endif
     
 #if os(Android)
     

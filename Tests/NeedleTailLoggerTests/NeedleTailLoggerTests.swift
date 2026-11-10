@@ -32,6 +32,129 @@ struct NeedleTailLoggerAPITests {
     }
 }
 
+/// File logging is the same on every platform, Android included: nothing here sits behind a
+/// platform check, and nothing here needs swift-log.
+struct NeedleTailLoggerFileTests {
+    private func temporaryLogFile() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("NeedleTailLoggerTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("logs.txt")
+    }
+
+    private func lines(of file: URL) throws -> [String] {
+        try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map { String($0) }
+    }
+
+    @Test
+    func writesEveryLoggedLineToItsFile() throws {
+        let logFile = temporaryLogFile()
+        defer { try? FileManager.default.removeItem(at: logFile.deletingLastPathComponent()) }
+
+        let logger = NeedleTailLogger("[FileTest]", maxLineLength: 512, logFileURL: logFile)
+        #expect(logger.activeLogFileURL == logFile)
+        logger.log(level: .info, message: "first line with sharedId=ABC", displayIcons: false)
+        logger.log(level: .warning, message: "second line", displayIcons: false)
+
+        let written = try lines(of: logFile)
+        #expect(written.count == 3)
+        #expect(written.allSatisfy { $0.hasPrefix("[20") })
+        #expect(written[0].hasSuffix("] NeedleTailLogger.fileLog=\(logFile.path)"))
+        #expect(written[1].hasSuffix("] first line with sharedId=ABC"))
+        #expect(written[2].hasSuffix("] second line"))
+    }
+
+    @Test
+    func aLoggerNotAskedForAFileHasNone() {
+        #expect(NeedleTailLogger("[NoFile]").activeLogFileURL == nil)
+    }
+
+    @Test
+    func setsAFullFileAsideAndStartsItAgain() throws {
+        let logFile = temporaryLogFile()
+        let folder = logFile.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let logger = NeedleTailLogger("[Rotate]", level: .info, maxLines: 3, maxLineLength: 512, logFileURL: logFile)
+        for index in 0..<5 {
+            logger.log(level: .info, message: "line \(index)", displayIcons: false)
+        }
+
+        // The file asked for always holds the newest lines; the full one was set aside whole.
+        #expect(logger.activeLogFileURL == logFile)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(names.count == 2)
+        let closedName = try #require(names.first { $0 != "logs.txt" })
+        #expect(closedName.hasPrefix("logs_") && closedName.hasSuffix(".txt"))
+        let closed = try lines(of: folder.appendingPathComponent(closedName))
+        #expect(closed.count == 3)
+        for index in 0..<3 {
+            #expect(closed[index].hasSuffix("] line \(index)"))
+        }
+        let current = try lines(of: logFile)
+        #expect(current.count == 2)
+        #expect(current.first?.hasSuffix("] line 3") == true)
+        #expect(current.last?.hasSuffix("] line 4") == true)
+    }
+
+    /// A logger opened on a file that is already full must not add to it. The check at
+    /// start-up used to do nothing, so each new process added up to `maxLines` more lines to
+    /// the same file: one phone's `logs.txt` reached 29,521 lines against a limit of 5,000.
+    @Test
+    func aFullFileIsSetAsideByTheNextProcess() throws {
+        let logFile = temporaryLogFile()
+        let folder = logFile.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        // One process fills the file to its limit and ends.
+        let first = NeedleTailLogger("[Full]", level: .info, maxLines: 3, maxLineLength: 512, logFileURL: logFile)
+        for index in 0..<3 {
+            first.log(level: .info, message: "first \(index)", displayIcons: false)
+        }
+        #expect(try lines(of: logFile).count == 3)
+
+        // The next process opens the same file.
+        let second = NeedleTailLogger("[Full]", level: .info, maxLines: 3, maxLineLength: 512, logFileURL: logFile)
+        second.log(level: .info, message: "second 0", displayIcons: false)
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(names.count == 2)
+        let current = try lines(of: logFile)
+        #expect(current.count == 1)
+        #expect(current.first?.hasSuffix("] second 0") == true)
+        let closedName = try #require(names.first { $0 != "logs.txt" })
+        let closed = try lines(of: folder.appendingPathComponent(closedName))
+        #expect(closed.count == 3)
+        #expect(closed.last?.hasSuffix("] first 2") == true)
+    }
+
+    /// Two loggers can share a folder (the notification extension's two logs do), so a file
+    /// set aside carries the name of the file it came from.
+    @Test
+    func aFileSetAsideKeepsItsOwnName() throws {
+        let logFile = temporaryLogFile().deletingLastPathComponent().appendingPathComponent("connection.txt")
+        let folder = logFile.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let logger = NeedleTailLogger("[Named]", level: .info, maxLines: 1, maxLineLength: 512, logFileURL: logFile)
+        logger.log(level: .info, message: "one", displayIcons: false)
+        logger.log(level: .info, message: "two", displayIcons: false)
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(names.count == 2)
+        #expect(names.contains("connection.txt"))
+        #expect(names.contains { $0.hasPrefix("connection_") && $0.hasSuffix(".txt") })
+    }
+
+    @Test
+    func theDefaultFolderIsNamedForTheLabel() throws {
+        let folder = try #require(NeedleTailLogger.defaultLogDirectory(label: "[Connection]"))
+        #expect(folder.path.hasSuffix("/Logs/NeedleTailLogger/[Connection]"))
+#if os(macOS) || os(iOS)
+        #expect(folder.path.contains("/Library/Logs/"))
+#endif
+    }
+}
+
 actor LoggerTests {
 
     var logMessages: [Message] = []
